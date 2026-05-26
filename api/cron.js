@@ -170,14 +170,21 @@ async function generateImage({ prompt, size }) {
       n: 1,
       size,
       quality: "standard",
-      response_format: "b64_json",
     }),
   });
   if (!res.ok) throw new Error(`OpenAI image gen failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
-  const b64 = data?.data?.[0]?.b64_json;
-  if (!b64) throw new Error(`OpenAI returned no image: ${JSON.stringify(data).slice(0, 300)}`);
-  return { success: true, buffer: Buffer.from(b64, "base64"), revisedPrompt: data?.data?.[0]?.revised_prompt };
+  const imageUrl = data?.data?.[0]?.url;
+  if (!imageUrl) throw new Error(`OpenAI returned no image URL: ${JSON.stringify(data).slice(0, 300)}`);
+  // Download the image bytes from the returned URL
+  const imgRes = await fetch(imageUrl);
+  if (!imgRes.ok) throw new Error(`Image download failed: ${imgRes.status}`);
+  const arrayBuf = await imgRes.arrayBuffer();
+  return {
+    success: true,
+    buffer: Buffer.from(arrayBuf),
+    revisedPrompt: data?.data?.[0]?.revised_prompt,
+  };
 }
 
 // ============================================================================
