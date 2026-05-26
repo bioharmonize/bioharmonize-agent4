@@ -19,9 +19,9 @@ const CANONICAL_FOLDER = "/BioHarmonize/01_Canonical_Approved";
 const IMAGES_FOLDER = "/BioHarmonize/Images";
 const STATUS_FOLDER = "/BioHarmonize/_status";
 
-// Image variants to generate per canonical
+// Image variants to generate per canonical (sizes per gpt-image-1 supported list)
 const VARIANTS = [
-  { name: "header", size: "1792x1024", style: "blog header" },
+  { name: "header", size: "1536x1024", style: "blog header" },
   { name: "ig", size: "1024x1024", style: "Instagram square card" },
 ];
 
@@ -165,26 +165,36 @@ async function generateImage({ prompt, size }) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "dall-e-3",
+      model: "gpt-image-1",
       prompt,
       n: 1,
       size,
-      quality: "standard",
+      quality: "medium",
     }),
   });
   if (!res.ok) throw new Error(`OpenAI image gen failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
-  const imageUrl = data?.data?.[0]?.url;
-  if (!imageUrl) throw new Error(`OpenAI returned no image URL: ${JSON.stringify(data).slice(0, 300)}`);
-  // Download the image bytes from the returned URL
-  const imgRes = await fetch(imageUrl);
-  if (!imgRes.ok) throw new Error(`Image download failed: ${imgRes.status}`);
-  const arrayBuf = await imgRes.arrayBuffer();
-  return {
-    success: true,
-    buffer: Buffer.from(arrayBuf),
-    revisedPrompt: data?.data?.[0]?.revised_prompt,
-  };
+  const item = data?.data?.[0];
+  if (!item) throw new Error(`OpenAI returned no data: ${JSON.stringify(data).slice(0, 300)}`);
+  // gpt-image-1 returns base64 by default; fall back to URL if API ever changes
+  if (item.b64_json) {
+    return {
+      success: true,
+      buffer: Buffer.from(item.b64_json, "base64"),
+      revisedPrompt: item.revised_prompt,
+    };
+  }
+  if (item.url) {
+    const imgRes = await fetch(item.url);
+    if (!imgRes.ok) throw new Error(`Image download failed: ${imgRes.status}`);
+    const arrayBuf = await imgRes.arrayBuffer();
+    return {
+      success: true,
+      buffer: Buffer.from(arrayBuf),
+      revisedPrompt: item.revised_prompt,
+    };
+  }
+  throw new Error(`OpenAI returned no b64 or url: ${JSON.stringify(item).slice(0, 300)}`);
 }
 
 // ============================================================================
