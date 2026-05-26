@@ -1,0 +1,6 @@
+{
+  "name": "bioharmonize-agent4",
+  "version": "1.0.0",
+  "description": "BioHarmonize Agent 4: Image Generator (Vercel cron). Generates blog header and IG card per canonical via DALL-E 3.",
+  "type": "module"
+}
