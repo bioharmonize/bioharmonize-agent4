@@ -18,6 +18,8 @@
 const CANONICAL_FOLDER = "/BioHarmonize/01_Canonical_Approved";
 const IMAGES_FOLDER = "/BioHarmonize/Images";
 const STATUS_FOLDER = "/BioHarmonize/_status";
+const ALERTS_FOLDER = "/BioHarmonize/_alerts";
+const AGENT_NAME = "agent_4_images";
 
 // Image variants to generate per canonical (sizes per gpt-image-1 supported list)
 const VARIANTS = [
@@ -231,12 +233,48 @@ async function writeStatus(payload) {
   try {
     await ensureFolder(STATUS_FOLDER);
     await uploadJsonFile(`${STATUS_FOLDER}/agent_4_last_run.json`, {
-      agent: "agent_4_images",
+      agent: AGENT_NAME,
       ...payload,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
     console.warn("Failed to write status:", err.message);
+  }
+}
+
+async function sendAlert({ severity = "error", summary, detail, context = {} }) {
+  const ts = new Date().toISOString();
+  const safeTs = ts.replace(/[:.]/g, "-");
+  const alert = { ts, agent: AGENT_NAME, severity, summary, detail: String(detail || "").slice(0, 8000), context };
+  try {
+    await ensureFolder(ALERTS_FOLDER);
+    await uploadJsonFile(`${ALERTS_FOLDER}/${safeTs}_${AGENT_NAME}.json`, alert);
+  } catch (err) {
+    console.warn("sendAlert: dropbox write failed:", err.message);
+  }
+  if (!process.env.KLAVIYO_API_KEY || !process.env.ALERT_EMAIL) return;
+  try {
+    await fetch("https://a.klaviyo.com/api/events/", {
+      method: "POST",
+      headers: {
+        Authorization: `Klaviyo-API-Key ${process.env.KLAVIYO_API_KEY}`,
+        "Content-Type": "application/json",
+        accept: "application/json",
+        revision: "2024-10-15",
+      },
+      body: JSON.stringify({
+        data: {
+          type: "event",
+          attributes: {
+            properties: { agent: AGENT_NAME, severity, summary, detail: alert.detail, ...context },
+            metric: { data: { type: "metric", attributes: { name: "BioHarmonize Pipeline Alert" } } },
+            profile: { data: { type: "profile", attributes: { email: process.env.ALERT_EMAIL } } },
+          },
+        },
+      }),
+    });
+  } catch (err) {
+    console.warn("sendAlert: klaviyo fire failed:", err.message);
   }
 }
 
@@ -340,6 +378,21 @@ export default async function handler(req, res) {
       runStartedAt,
     };
     await writeStatus(payload);
+
+    // Per-variant failure alerts (OpenAI errors etc.). Skipped variants are not alerts.
+    for (const r of results) {
+      if (!r?.results) continue;
+      for (const v of r.results) {
+        if (v.success === false) {
+          await sendAlert({
+            severity: "error",
+            summary: `Agent 4: ${v.variant} image generation failed for ${r.filename}`,
+            detail: v.error || JSON.stringify(v),
+            context: { file: r.filename, variant: v.variant },
+          });
+        }
+      }
+    }
     return res.status(200).json({ ...payload, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error("Agent 4 failed:", err);
@@ -350,6 +403,11 @@ export default async function handler(req, res) {
       runStartedAt,
     };
     await writeStatus(payload).catch(() => {});
+    await sendAlert({
+      severity: "error",
+      summary: `Agent 4 crashed (${err.message?.slice(0, 80) || "unknown"})`,
+      detail: `${err.message}\n\n${err.stack}`,
+    }).catch(() => {});
     return res.status(500).json({ ...payload, timestamp: new Date().toISOString() });
   }
 }
